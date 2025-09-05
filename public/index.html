@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat Starter</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; }
+      header { padding: 12px 16px; background: #f2f2f2; display: flex; gap: 8px; align-items: center; }
+      main { display: grid; grid-template-columns: 220px 1fr; height: calc(100vh - 56px); }
+      #rooms { border-right: 1px solid #eee; padding: 12px; overflow: auto; }
+      #chat { display: grid; grid-template-rows: 1fr auto; }
+      #messages { padding: 12px; overflow: auto; }
+      #input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; }
+      .bubble { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: #f6f6f6; }
+      .mine { background: #d7ebff; }
+      .meta { font-size: 12px; color: #666; }
+      .presence { font-size: 12px; color: #444; margin-top: 8px; }
+      .system { color: #888; font-style: italic; }
+      input, button, select { font: inherit; padding: 8px; }
+      #typing { font-size: 12px; color: #555; padding: 0 12px; height: 18px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label>Username: <input id="name" placeholder="e.g. venky2135" /></label>
+      <label>Room: <input id="room" value="general" /></label>
+      <button id="joinBtn">Join</button>
+    </header>
+    <main>
+      <aside id="rooms">
+        <h3>Members</h3>
+        <div id="members"></div>
+      </aside>
+      <section id="chat">
+        <div id="messages"></div>
+        <div id="typing"></div>
+        <div id="input">
+          <input id="text" placeholder="Type a message..." />
+          <button id="send">Send</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/client.js"></script>
+  </body>
+</html>
