@@ -3,43 +3,193 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Chat Starter</title>
+    <title>WhatsApp-style Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; }
-      header { padding: 12px 16px; background: #f2f2f2; display: flex; gap: 8px; align-items: center; }
-      main { display: grid; grid-template-columns: 220px 1fr; height: calc(100vh - 56px); }
-      #rooms { border-right: 1px solid #eee; padding: 12px; overflow: auto; }
-      #chat { display: grid; grid-template-rows: 1fr auto; }
-      #messages { padding: 12px; overflow: auto; }
-      #input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #eee; }
-      .bubble { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: #f6f6f6; }
-      .mine { background: #d7ebff; }
-      .meta { font-size: 12px; color: #666; }
-      .presence { font-size: 12px; color: #444; margin-top: 8px; }
-      .system { color: #888; font-style: italic; }
-      input, button, select { font: inherit; padding: 8px; }
-      #typing { font-size: 12px; color: #555; padding: 0 12px; height: 18px; }
+      :root {
+        --bg:#121212;
+        --panel:#1f1f1f;
+        --accent:#ffcc00;
+        --mine:#ffe066;
+        --theirs:#2a2a2a;
+        --border:#333;
+        --muted:#999;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height:100%; }
+      body {
+        margin:0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        background: var(--bg);
+        color:#fff;
+        display:flex;
+      }
+
+      /* Sidebar */
+      aside {
+        width: 320px;
+        border-right:1px solid var(--border);
+        background:#181818;
+        display:flex;
+        flex-direction:column;
+        height:100vh;
+      }
+      .sidebar-header {
+        padding:12px;
+        display:flex;
+        gap:8px;
+        align-items:center;
+        border-bottom:1px solid var(--border);
+        background:#222;
+      }
+      .sidebar-header input {
+        flex:1; padding:8px 10px; border-radius:8px;
+        border:1px solid var(--border); background:#111; color:#fff;
+      }
+      .sidebar-actions { padding:10px 12px; display:flex; gap:8px; }
+      .sidebar-actions input {
+        flex:1; padding:8px 10px; border-radius:8px;
+        border:1px solid var(--border); background:#111; color:#fff;
+      }
+      .btn {
+        padding:8px 12px; border-radius:10px; border:1px solid var(--border);
+        background:#333; color:#fff; cursor:pointer;
+      }
+      .btn.primary { background: var(--accent); color:#111; border:none; }
+
+      #chat-list { overflow:auto; }
+      .section-title {
+        padding:8px 12px; font-size:12px; text-transform:uppercase;
+        color:var(--muted); letter-spacing:.04em;
+      }
+      .chat-item {
+        padding:12px; display:flex; align-items:center; gap:10px;
+        cursor:pointer; border-bottom:1px solid var(--border); background:#1f1f1f;
+      }
+      .chat-item:hover { background:#2a2a2a; }
+      .chat-item.active { background:#444; }
+      .chat-item .avatar {
+        width:36px; height:36px; border-radius:999px; background:#555;
+        display:grid; place-items:center; font-weight:600; color:#fff;
+      }
+      .chat-item .meta { flex:1; }
+      .chat-item .name { font-weight:600; }
+      .chat-item .sub { font-size:12px; color:var(--muted); }
+
+      /* Chat area */
+      main {
+        flex:1; display:flex; flex-direction:column; height:100vh;
+        background:#000;
+      }
+      .chat-header {
+        height:56px; padding:10px 14px; display:flex; align-items:center; gap:8px;
+        border-bottom:1px solid var(--border); background:#111;
+      }
+      .chat-header .title { font-weight:700; }
+
+      /* Wallpapers */
+      #messages {
+        flex:1; overflow:auto; padding:16px;
+        background-size: cover; background-position:center;
+        background-color:#000;
+        position: relative;
+      }
+      /* Dark overlay so chats stand out */
+      #messages::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,0.55); /* makes wallpaper dull */
+        pointer-events: none;
+      }
+
+      body.default-wallpaper #messages {
+        background-image: url("/images/1519436.png");
+      }
+      body.group1 #messages {
+        background-image: url("/images/1519436.png");
+      }
+      body.group2 #messages {
+        background-image: url("/images/e6cbaf87-ee26-4f74-b4ae-1396b1d460f5.jpeg");
+      }
+      body.group3 #messages {
+        background-image: url("/images/family-guy-wallpaper.jpeg");
+      }
+
+      .bubble {
+        max-width:70%; padding:10px 12px; border-radius:12px;
+        margin:6px 0; background:var(--theirs);
+        box-shadow: 0 1px 0 rgba(0,0,0,.4); color:#fff;
+        position: relative; z-index: 1;
+      }
+      .bubble.mine {
+        margin-left:auto; background: var(--mine); color:#111;
+      }
+      .meta-time { font-size:11px; color:#ccc; margin-top:4px; text-align:right; }
+      .system { font-style: italic; color:#bbb; text-align:center; background: transparent; box-shadow:none; }
+
+      #typing { height:18px; font-size:12px; color:#aaa; padding: 0 16px; }
+
+      .input-bar {
+        display:flex; gap:8px; padding:12px;
+        background:#181818; border-top:1px solid var(--border);
+      }
+      .input-bar input {
+        flex:1; padding:12px 14px; border-radius:24px;
+        border:1px solid var(--border); background:#111; color:#fff;
+      }
+      .send-btn {
+        width:44px; height:44px; border-radius:999px; border:none;
+        background:var(--accent); color:#111; font-weight:700; cursor:pointer;
+      }
+
+      .presence { padding:8px 12px; font-size:12px; color:var(--muted); }
+      .toast {
+        position:fixed; right:16px; bottom:16px; background:#111;
+        color:#fff; padding:10px 12px; border-radius:10px; opacity:.95;
+      }
+
+      @media (max-width: 900px) {
+        aside { width: 100%; max-width: 360px; }
+      }
     </style>
   </head>
-  <body>
-    <header>
-      <label>Username: <input id="name" placeholder="e.g. venky2135" /></label>
-      <label>Room: <input id="room" value="general" /></label>
-      <button id="joinBtn">Join</button>
-    </header>
+  <body class="default-wallpaper">
+    <aside>
+      <div class="sidebar-header">
+        <input id="name" placeholder="Your name (e.g. venky2135)" />
+        <button class="btn primary" id="joinBtn">Join</button>
+      </div>
+
+      <div class="sidebar-actions">
+        <input id="newGroupName" placeholder="New group name" />
+        <button class="btn" id="createGroupBtn">Create</button>
+      </div>
+
+      <div id="chat-list">
+        <div class="section-title">People</div>
+        <div id="people"></div>
+        <div class="section-title">Groups</div>
+        <div id="groups"></div>
+        <div class="presence" id="presence"></div>
+      </div>
+    </aside>
+
     <main>
-      <aside id="rooms">
-        <h3>Members</h3>
-        <div id="members"></div>
-      </aside>
-      <section id="chat">
-        <div id="messages"></div>
-        <div id="typing"></div>
-        <div id="input">
-          <input id="text" placeholder="Type a message..." />
-          <button id="send">Send</button>
-        </div>
-      </section>
+      <div class="chat-header">
+        <div class="avatar" id="chatAvatar">💬</div>
+        <div class="title" id="chatTitle">No chat selected</div>
+      </div>
+
+      <div id="messages"></div>
+      <div id="typing"></div>
+      <div class="input-bar">
+        <input id="text" placeholder="Type a message" />
+        <button class="send-btn" id="send">➤</button>
+      </div>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>

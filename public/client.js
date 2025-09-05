@@ -1,70 +1,212 @@
 const socket = io();
 
+// Elements
 const els = {
   name: document.getElementById('name'),
-  room: document.getElementById('room'),
   joinBtn: document.getElementById('joinBtn'),
+  newGroupName: document.getElementById('newGroupName'),
+  createGroupBtn: document.getElementById('createGroupBtn'),
+  people: document.getElementById('people'),
+  groups: document.getElementById('groups'),
+  presence: document.getElementById('presence'),
+  chatTitle: document.getElementById('chatTitle'),
+  chatAvatar: document.getElementById('chatAvatar'),
+  messages: document.getElementById('messages'),
+  typing: document.getElementById('typing'),
   text: document.getElementById('text'),
   send: document.getElementById('send'),
-  messages: document.getElementById('messages'),
-  members: document.getElementById('members'),
-  typing: document.getElementById('typing')
 };
 
-function addMsg({ user, text, ts, mine, system }) {
+let me = null;
+let activeChat = null; // { type: 'private'|'group', id: string }
+
+// Map specific groups to wallpapers
+const groupWallpapers = {
+  General: 'group1',
+  Friends: 'group2',
+  Family: 'group3',
+};
+
+// Helpers
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function renderChatItem(name, type) {
   const div = document.createElement('div');
-  div.className = system ? 'bubble system' : mine ? 'bubble mine' : 'bubble';
+  div.className = 'chat-item';
+  div.dataset.chatType = type;
+  div.dataset.chatId = name;
+  div.innerHTML = `
+    <div class="avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div>
+    <div class="meta">
+      <div class="name">${escapeHtml(name)}</div>
+      <div class="sub">${type === 'group' ? 'Group' : 'Direct message'}</div>
+    </div>
+  `;
+  div.addEventListener('click', () => selectChat({ type, id: name }, div));
+  return div;
+}
+
+function setActiveTile(tile) {
+  document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+  tile?.classList.add('active');
+}
+
+function selectChat(chat, tileEl) {
+  activeChat = chat;
+  setActiveTile(tileEl);
+
+  // Update header
+  els.chatTitle.textContent = chat.id;
+  els.chatAvatar.textContent = chat.id.charAt(0).toUpperCase();
+
+  // Update background wallpaper if it's a group
+  document.body.classList.remove('default-wallpaper', 'group1', 'group2', 'group3');
+
+  if (chat.type === 'group') {
+    const groupClass = groupWallpapers[chat.id];
+    if (groupClass) {
+      document.body.classList.add(groupClass);
+    } else {
+      // fallback if group has no custom wallpaper
+      document.body.classList.add('default-wallpaper');
+    }
+  }
+
+  // Load history
+  if (chat.type === 'private') socket.emit('load_private', { withUser: chat.id });
+  else socket.emit('load_group', { group: chat.id });
+
+  // reset typing line
+  els.typing.textContent = '';
+}
+
+function clearMessages() {
+  els.messages.innerHTML = '';
+}
+
+function addMsg({ user, text, ts, system, mine }) {
+  const div = document.createElement('div');
+  div.className = system ? 'bubble system' : 'bubble' + (mine ? ' mine' : '');
   const when = ts ? new Date(ts).toLocaleTimeString() : '';
   div.innerHTML = system
-    ? `<span class="system">${text}</span>`
-    : `<div><strong>${user}</strong> <span class="meta">${when}</span></div><div>${escapeHtml(text)}</div>`;
+    ? `<span>${escapeHtml(text)}</span>`
+    : `<div>${escapeHtml(text)}</div><div class="meta-time">${escapeHtml(user)} • ${when}</div>`;
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll('&','&amp;')
-    .replaceAll('<','&lt;')
-    .replaceAll('>','&gt;');
+function toast(t) {
+  const d = document.createElement('div');
+  d.className = 'toast';
+  d.textContent = t;
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 2200);
 }
 
-function renderMembers(list) {
-  els.members.innerHTML = list.map(n => `<div>• ${escapeHtml(n)}</div>`).join('');
-}
-
-let joined = false;
-
+// UI Events
 els.joinBtn.addEventListener('click', () => {
-  if (!els.name.value.trim() || !els.room.value.trim()) return alert('Enter username and room');
-  socket.emit('join', { room: els.room.value.trim(), name: els.name.value.trim() });
-  joined = true;
+  const name = els.name.value.trim();
+  if (!name) return alert('Enter your name');
+  me = name;
+  socket.emit('join', { name });
+  socket.emit('get_chat_list');
   els.text.focus();
 });
 
-els.send.addEventListener('click', () => {
-  if (!joined) return alert('Join first');
-  const text = els.text.value;
-  if (!text.trim()) return;
-  socket.emit('message', text);
-  addMsg({ user: els.name.value, text, ts: Date.now(), mine: true });
-  els.text.value = '';
-  socket.emit('typing', false);
+els.createGroupBtn.addEventListener('click', () => {
+  const name = els.newGroupName.value.trim();
+  if (!name) return;
+  socket.emit('create_group', { name });
+  els.newGroupName.value = '';
+});
+
+els.send.addEventListener('click', sendMessage);
+els.text.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendMessage();
 });
 
 els.text.addEventListener('input', () => {
-  if (!joined) return;
-  socket.emit('typing', !!els.text.value);
+  if (!activeChat) return;
+  socket.emit('typing', { chat: activeChat, isTyping: !!els.text.value });
 });
 
-socket.on('history', (arr) => {
-  els.messages.innerHTML = '';
-  arr.forEach(m => addMsg(m));
+function sendMessage() {
+  if (!activeChat) return alert('Select a chat first');
+  const text = els.text.value;
+  if (!text.trim()) return;
+
+  if (activeChat.type === 'private') {
+    socket.emit('send_private', { to: activeChat.id, text });
+  } else {
+    socket.emit('send_group', { group: activeChat.id, text });
+  }
+  els.text.value = '';
+  socket.emit('typing', { chat: activeChat, isTyping: false });
+}
+
+// Socket listeners
+socket.on('chat_list', ({ contacts, groups }) => {
+  // People
+  els.people.innerHTML = '';
+  contacts.forEach((name) => {
+    const item = renderChatItem(name, 'private');
+    els.people.appendChild(item);
+  });
+
+  // Groups
+  els.groups.innerHTML = '';
+  groups.forEach((g) => {
+    const item = renderChatItem(g.name, 'group');
+    els.groups.appendChild(item);
+  });
 });
 
-socket.on('message', (m) => addMsg(m));
-socket.on('system', (t) => addMsg({ text: t, system: true }));
-socket.on('presence', (list) => renderMembers(list));
-socket.on('typing', ({ user, isTyping }) => {
-  els.typing.textContent = isTyping ? `${user} is typing...` : '';
+socket.on('chat_list_update', () => socket.emit('get_chat_list'));
+
+socket.on('history', ({ type, id, messages }) => {
+  // Only render if history belongs to open chat
+  if (!activeChat || activeChat.type !== type || activeChat.id !== id) return;
+  clearMessages();
+  messages.forEach((m) => addMsg({ ...m, mine: m.user === me }));
 });
+
+socket.on('private_message', (m) => {
+  const isCurrent =
+    activeChat &&
+    activeChat.type === 'private' &&
+    (activeChat.id === m.user || activeChat.id === m.to);
+
+  if (isCurrent) {
+    addMsg({ ...m, mine: m.user === me });
+  } else {
+    toast(`New message from ${m.user}`);
+  }
+});
+
+socket.on('group_message', (m) => {
+  const isCurrent =
+    activeChat && activeChat.type === 'group' && activeChat.id === m.group;
+
+  if (isCurrent) {
+    addMsg({ ...m, mine: m.user === me });
+  } else {
+    toast(`New message in ${m.group} from ${m.user}`);
+  }
+});
+
+socket.on('typing', ({ chat, user, isTyping }) => {
+  if (!activeChat || activeChat.type !== chat.type || activeChat.id !== chat.id) return;
+  if (user === me) return; // don't show self
+  els.typing.textContent = isTyping ? `${user} is typing…` : '';
+});
+
+socket.on('presence', (list) => {
+  els.presence.textContent = `Online: ${list.length} — ${list.join(', ')}`;
+});
+
+socket.on('toast', (t) => toast(t));
