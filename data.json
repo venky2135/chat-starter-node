@@ -1,0 +1,32 @@
+{
+  "groups": {
+    "General": {
+      "members": [
+        "sivani konda",
+        "venky"
+      ],
+      "messages": []
+    },
+    "Private": {
+      "members": [
+        "venky",
+        "sivani konda"
+      ],
+      "messages": [
+        {
+          "user": "venky",
+          "group": "Private",
+          "text": "Hii sivani",
+          "ts": 1757153245460
+        },
+        {
+          "user": "sivani konda",
+          "group": "Private",
+          "text": "hii venky",
+          "ts": 1757153255576
+        }
+      ]
+    }
+  },
+  "privateChats": {}
+}

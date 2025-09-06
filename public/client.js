@@ -20,13 +20,6 @@ const els = {
 let me = null;
 let activeChat = null; // { type: 'private'|'group', id: string }
 
-// Map specific groups to wallpapers
-const groupWallpapers = {
-  General: 'group1',
-  Friends: 'group2',
-  Family: 'group3',
-};
-
 // Helpers
 function escapeHtml(str) {
   return String(str)
@@ -35,7 +28,7 @@ function escapeHtml(str) {
     .replaceAll('>', '&gt;');
 }
 
-function renderChatItem(name, type) {
+function renderChatItem(name, type, joined) {
   const div = document.createElement('div');
   div.className = 'chat-item';
   div.dataset.chatType = type;
@@ -44,10 +37,22 @@ function renderChatItem(name, type) {
     <div class="avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div>
     <div class="meta">
       <div class="name">${escapeHtml(name)}</div>
-      <div class="sub">${type === 'group' ? 'Group' : 'Direct message'}</div>
+      <div class="sub">${
+        type === 'group'
+          ? (joined ? 'Group' : 'Not a member — click to join')
+          : 'Direct message'
+      }</div>
     </div>
   `;
-  div.addEventListener('click', () => selectChat({ type, id: name }, div));
+
+  div.addEventListener('click', () => {
+    if (type === 'group' && !joined) {
+      socket.emit('join_group', { name });
+    } else {
+      selectChat({ type, id: name }, div);
+    }
+  });
+
   return div;
 }
 
@@ -64,24 +69,10 @@ function selectChat(chat, tileEl) {
   els.chatTitle.textContent = chat.id;
   els.chatAvatar.textContent = chat.id.charAt(0).toUpperCase();
 
-  // Update background wallpaper if it's a group
-  document.body.classList.remove('default-wallpaper', 'group1', 'group2', 'group3');
-
-  if (chat.type === 'group') {
-    const groupClass = groupWallpapers[chat.id];
-    if (groupClass) {
-      document.body.classList.add(groupClass);
-    } else {
-      // fallback if group has no custom wallpaper
-      document.body.classList.add('default-wallpaper');
-    }
-  }
-
   // Load history
   if (chat.type === 'private') socket.emit('load_private', { withUser: chat.id });
   else socket.emit('load_group', { group: chat.id });
 
-  // reset typing line
   els.typing.textContent = '';
 }
 
@@ -151,17 +142,15 @@ function sendMessage() {
 
 // Socket listeners
 socket.on('chat_list', ({ contacts, groups }) => {
-  // People
   els.people.innerHTML = '';
   contacts.forEach((name) => {
-    const item = renderChatItem(name, 'private');
+    const item = renderChatItem(name, 'private', true);
     els.people.appendChild(item);
   });
 
-  // Groups
   els.groups.innerHTML = '';
   groups.forEach((g) => {
-    const item = renderChatItem(g.name, 'group');
+    const item = renderChatItem(g.name, 'group', g.joined);
     els.groups.appendChild(item);
   });
 });
@@ -169,7 +158,6 @@ socket.on('chat_list', ({ contacts, groups }) => {
 socket.on('chat_list_update', () => socket.emit('get_chat_list'));
 
 socket.on('history', ({ type, id, messages }) => {
-  // Only render if history belongs to open chat
   if (!activeChat || activeChat.type !== type || activeChat.id !== id) return;
   clearMessages();
   messages.forEach((m) => addMsg({ ...m, mine: m.user === me }));
@@ -201,7 +189,7 @@ socket.on('group_message', (m) => {
 
 socket.on('typing', ({ chat, user, isTyping }) => {
   if (!activeChat || activeChat.type !== chat.type || activeChat.id !== chat.id) return;
-  if (user === me) return; // don't show self
+  if (user === me) return;
   els.typing.textContent = isTyping ? `${user} is typing…` : '';
 });
 

@@ -1,202 +1,214 @@
 const express = require('express');
 const http = require('http');
-const cors = require('cors');
-const path = require('path');
 const { Server } = require('socket.io');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
-app.use(cors());
+const server = http.createServer(app);
+const io = new Server(server);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
-});
+// ===== Storage =====
+const DATA_FILE = path.join(__dirname, 'data.json');
 
-const PORT = process.env.PORT || 3000;
+let users = new Map(); // online users only: name -> { socketId }
+let groups = new Map(); // groupName -> { members:Set, messages:[] }
+let privateChats = new Map(); // key "a::b" -> { messages:[] }
 
-// ==================================
-// In-memory stores (for demo only)
-// ==================================
-/**
- * users: Map<username, { socketId: string, lastSeen: number }>
- * groups: Map<groupName, { members: Set<username>, messages: Message[] }>
- * privateChats: Map<threadKey, { messages: Message[] }>
- * Message = { id, user, text, ts, system?, kind?, to?, group? }
- */
-const users = new Map();
-const groups = new Map();
-const privateChats = new Map();
+// ---- Load data from file ----
+function loadData() {
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      const obj = JSON.parse(raw);
 
-// Create default group
-ensureGroup('General');
+      groups = new Map(
+        Object.entries(obj.groups || {}).map(([name, g]) => [
+          name,
+          { members: new Set(g.members), messages: g.messages || [] },
+        ])
+      );
 
-function ensureGroup(name) {
-  if (!groups.has(name)) groups.set(name, { members: new Set(), messages: [] });
-  return groups.get(name);
+      privateChats = new Map(
+        Object.entries(obj.privateChats || {}).map(([key, t]) => [
+          key,
+          { messages: t.messages || [] },
+        ])
+      );
+
+      console.log('✅ Data loaded from file');
+    } catch (err) {
+      console.error('❌ Failed to load data:', err);
+    }
+  } else {
+    // default General group
+    groups.set('General', { members: new Set(), messages: [] });
+  }
+}
+
+// ---- Save data to file ----
+function saveData() {
+  const obj = {
+    groups: Object.fromEntries(
+      Array.from(groups.entries()).map(([name, g]) => [
+        name,
+        { members: Array.from(g.members), messages: g.messages },
+      ])
+    ),
+    privateChats: Object.fromEntries(
+      Array.from(privateChats.entries()).map(([key, t]) => [
+        key,
+        { messages: t.messages },
+      ])
+    ),
+  };
+  fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 2));
+}
+
+// Load at startup
+loadData();
+
+// ===== Helpers =====
+function publicUserList() {
+  return Array.from(users.keys());
+}
+
+function emitChatList(socket) {
+  const contacts = publicUserList();
+  const me = Array.from(users.entries()).find(([name, v]) => v.socketId === socket.id)?.[0];
+  const filteredContacts = me ? contacts.filter((u) => u !== me) : contacts;
+
+  const groupList = Array.from(groups.entries()).map(([name, g]) => ({
+    name,
+    members: g.members.size,
+    joined: me ? g.members.has(me) : false,
+  }));
+
+  socket.emit('chat_list', { contacts: filteredContacts, groups: groupList });
 }
 
 function threadKey(a, b) {
   return [a, b].sort((x, y) => x.localeCompare(y)).join('::');
 }
 
-function trimPush(arr, item, max = 500) {
-  arr.push(item);
-  if (arr.length > max) arr.shift();
-}
-
-function publicUserList() {
-  return Array.from(users.keys());
-}
-
-function id() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
+// ===== Socket.io =====
 io.on('connection', (socket) => {
-  let username = null;
+  console.log('New connection', socket.id);
 
-  // 1) Join with username; auto-join "General" group
   socket.on('join', ({ name }) => {
-    if (!name || typeof name !== 'string') return;
-    username = name.trim();
-    if (!username) return;
+    users.set(name, { socketId: socket.id });
+    socket.data.name = name;
 
-    users.set(username, { socketId: socket.id, lastSeen: Date.now() });
-
-    const general = ensureGroup('General');
-    general.members.add(username);
-    socket.join('General');
-
-    emitChatList(socket); // initial lists
+    console.log(`${name} joined`);
 
     io.emit('presence', publicUserList());
-    io.emit('chat_list_update');
+    emitChatList(socket);
 
-    const sysMsg = { id: id(), user: 'system', text: `${username} joined`, ts: Date.now(), system: true };
-    trimPush(general.messages, sysMsg);
-    io.to('General').emit('group_message', { group: 'General', ...sysMsg });
+    // Auto-join General
+    groups.get('General').members.add(name);
+    saveData();
+    socket.emit('toast', 'Joined General group automatically');
   });
 
-  // 2) Load chat histories
-  socket.on('load_private', ({ withUser }) => {
-    if (!username || !withUser) return;
-    const key = threadKey(username, withUser);
-    const thread = privateChats.get(key) || { messages: [] };
-    socket.emit('history', { type: 'private', id: withUser, messages: thread.messages.slice(-100) });
+  socket.on('get_chat_list', () => {
+    emitChatList(socket);
   });
 
-  socket.on('load_group', ({ group }) => {
-    if (!username || !group) return;
-    const g = ensureGroup(group);
-    socket.emit('history', { type: 'group', id: group, messages: g.messages.slice(-100) });
-  });
-
-  // 3) Create & join groups
   socket.on('create_group', ({ name }) => {
-    if (!username) return;
-    const group = String(name || '').trim();
-    if (!group) return;
-    if (groups.has(group)) {
-      socket.emit('toast', `Group "${group}" already exists.`);
-      return;
+    if (!groups.has(name)) {
+      groups.set(name, { members: new Set(), messages: [] });
+      saveData();
+      console.log('Group created:', name);
+      io.emit('chat_list_update');
     }
-    ensureGroup(group).members.add(username);
-    socket.join(group);
-    io.emit('chat_list_update');
-    socket.emit('toast', `Created group "${group}"`);
   });
 
   socket.on('join_group', ({ name }) => {
-    if (!username) return;
-    const group = String(name || '').trim();
-    if (!group || !groups.has(group)) return;
-    const g = ensureGroup(group);
-    g.members.add(username);
-    socket.join(group);
-    io.emit('chat_list_update');
-    io.to(group).emit('toast', `${username} joined ${group}`);
-  });
-
-  // 4) Send messages
-  socket.on('send_private', ({ to, text }) => {
-    if (!username || !to || !text?.trim()) return;
-    const msg = {
-      id: id(),
-      user: username,
-      text: String(text).slice(0, 2000),
-      ts: Date.now(),
-      kind: 'private',
-      to
-    };
-    const key = threadKey(username, to);
-    const thread = privateChats.get(key) || { messages: [] };
-    privateChats.set(key, thread);
-    trimPush(thread.messages, msg);
-
-    // To sender
-    socket.emit('private_message', { ...msg, mine: true });
-
-    // To recipient (if online)
-    const rec = users.get(to);
-    if (rec?.socketId) io.to(rec.socketId).emit('private_message', msg);
-
-    io.emit('chat_list_update');
-  });
-
-  socket.on('send_group', ({ group, text }) => {
-    if (!username || !group || !text?.trim()) return;
-    const g = ensureGroup(group);
-    if (!g.members.has(username)) return; // must be a member
-
-    const msg = {
-      id: id(),
-      user: username,
-      text: String(text).slice(0, 2000),
-      ts: Date.now(),
-      kind: 'group',
-      group
-    };
-    trimPush(g.messages, msg);
-    io.to(group).emit('group_message', msg);
-    io.emit('chat_list_update');
-  });
-
-  // 5) Typing indicators
-  socket.on('typing', ({ chat, isTyping }) => {
-    if (!username || !chat) return;
-    if (chat.type === 'private') {
-      const rec = users.get(chat.id);
-      if (rec?.socketId) io.to(rec.socketId).emit('typing', { chat, user: username, isTyping: !!isTyping });
-    } else if (chat.type === 'group') {
-      socket.to(chat.id).emit('typing', { chat, user: username, isTyping: !!isTyping });
+    const group = groups.get(name);
+    if (group) {
+      group.members.add(socket.data.name);
+      saveData();
+      socket.emit('toast', `You joined ${name}`);
+      emitChatList(socket);
     }
   });
 
-  // 6) Ask for latest chat list
-  socket.on('get_chat_list', () => emitChatList(socket));
+  socket.on('send_private', ({ to, text }) => {
+    const from = socket.data.name;
+    if (!from || !to || !text?.trim()) return;
 
-  // 7) Disconnect
+    const key = threadKey(from, to);
+    if (!privateChats.has(key)) privateChats.set(key, { messages: [] });
+
+    const msg = { user: from, to, text, ts: Date.now() };
+    privateChats.get(key).messages.push(msg);
+    saveData();
+
+    const target = users.get(to);
+    if (target) io.to(target.socketId).emit('private_message', msg);
+    io.to(socket.id).emit('private_message', { ...msg, mine: true });
+  });
+
+  socket.on('send_group', ({ group, text }) => {
+    const g = groups.get(group);
+    if (!g) return;
+    const from = socket.data.name;
+    if (!g.members.has(from)) return;
+
+    const msg = { user: from, group, text, ts: Date.now() };
+    g.messages.push(msg);
+    saveData();
+
+    g.members.forEach((m) => {
+      const u = users.get(m);
+      if (u) io.to(u.socketId).emit('group_message', msg);
+    });
+  });
+
+  socket.on('load_group', ({ group }) => {
+    const g = groups.get(group);
+    if (!g) return;
+    socket.emit('history', { type: 'group', id: group, messages: g.messages });
+  });
+
+  socket.on('load_private', ({ withUser }) => {
+    const from = socket.data.name;
+    if (!from || !withUser) return;
+    const key = threadKey(from, withUser);
+    const thread = privateChats.get(key) || { messages: [] };
+    socket.emit('history', { type: 'private', id: withUser, messages: thread.messages });
+  });
+
+  socket.on('typing', ({ chat, isTyping }) => {
+    const from = socket.data.name;
+    if (!chat || !from) return;
+
+    if (chat.type === 'private') {
+      const target = users.get(chat.id);
+      if (target) {
+        io.to(target.socketId).emit('typing', { chat, user: from, isTyping });
+      }
+    } else if (chat.type === 'group') {
+      const g = groups.get(chat.id);
+      if (!g) return;
+      g.members.forEach((m) => {
+        if (m === from) return;
+        const u = users.get(m);
+        if (u) io.to(u.socketId).emit('typing', { chat, user: from, isTyping });
+      });
+    }
+  });
+
   socket.on('disconnect', () => {
-    if (!username) return;
-    users.delete(username);
-    io.emit('presence', publicUserList());
-    io.emit('chat_list_update');
+    const name = socket.data.name;
+    if (name) {
+      users.delete(name);
+      io.emit('presence', publicUserList());
+    }
+    console.log('Disconnected', socket.id);
   });
 });
 
-function emitChatList(socket) {
-  // Contacts (online users except me)
-  const contacts = publicUserList();
-  const me = Array.from(users.entries()).find(([name, v]) => v.socketId === socket.id)?.[0];
-  const filteredContacts = me ? contacts.filter((u) => u !== me) : contacts;
-
-  // All groups (show member count)
-  const groupList = Array.from(groups.entries()).map(([name, g]) => ({ name, members: g.members.size }));
-
-  socket.emit('chat_list', { contacts: filteredContacts, groups: groupList });
-}
-
-server.listen(PORT, () => {
-  console.log(`✅ Chat server running on http://localhost:${PORT}`);
-});
+server.listen(3000, () => console.log('Server running on http://localhost:3000'));
